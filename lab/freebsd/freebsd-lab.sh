@@ -19,6 +19,9 @@ set -eu
 JPFX=v4nh
 V4GWD="${V4GWD:-$(dirname "$0")/../../host/freebsd/v4gwd}"
 
+leftepair=${JPFX}left
+middleepair=${JPFX}middle
+rightepair=${JPFX}right
 
 lladdr() {  # lladdr <jail> <iface>
     jexec "${JPFX}$1" ifconfig "$2" inet6 | \
@@ -38,18 +41,16 @@ up() {
     done
 
     # left: hostA-R1, middle: R1-R2, right: R2-hostB
-    leftepair=$(create_epair)
-    ifconfig ${leftepair}a name ${JPFX}lefta
-    ifconfig ${leftepair}b name ${JPFX}leftb
-    leftepair=${JPFX}left
-    middleepair=$(create_epair)
-    ifconfig ${middleepair}a name ${JPFX}middlea
-    ifconfig ${middleepair}b name ${JPFX}middleb
-    middleepair=${JPFX}middle
-    rightepair=$(create_epair)
-    ifconfig ${rightepair}a name ${JPFX}righta
-    ifconfig ${rightepair}b name ${JPFX}rightb
-    rightepair=${JPFX}right
+    e=$(create_epair)
+    ifconfig ${e}a name ${leftepair}a
+    ifconfig ${e}b name ${leftepair}b
+    e=$(create_epair)
+    ifconfig ${e}a name ${middleepair}a
+    ifconfig ${e}b name ${middleepair}b
+    e=$(create_epair)
+    ifconfig ${e}a name ${rightepair}a
+    ifconfig ${e}b name ${rightepair}b
+    unset e
 
     ifconfig ${leftepair}a vnet ${JPFX}hostA; ifconfig ${leftepair}b vnet ${JPFX}r1
     ifconfig ${middleepair}a vnet ${JPFX}r1;    ifconfig ${middleepair}b vnet ${JPFX}r2
@@ -142,9 +143,9 @@ down() {
     for j in hostA r1 r2 hostB; do
         jail -r ${JPFX}$j 2>/dev/null || true
     done
-    ifconfig ${JPFX}lefta destroy
-    ifconfig ${JPFX}middlea destroy
-    ifconfig ${JPFX}righta destroy
+    ifconfig ${leftepair}a destroy
+    ifconfig ${middleepair}a destroy
+    ifconfig ${rightepair}a destroy
     echo "Lab down."
 }
 
