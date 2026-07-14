@@ -25,18 +25,35 @@ lladdr() {  # lladdr <jail> <iface>
         awk '/inet6 fe80/ { sub("%.*","",$2); print $2; exit }'
 }
 
+# Returns the base interface  name for the created epair
+create_epair() {
+    local ep
+    ep=`ifconfig epair create`
+    echo ${ep%a}
+}
+
 up() {
     for j in hostA r1 r2 hostB; do
         jail -c name=${JPFX}$j vnet persist
     done
 
-    # epair a: hostA-R1, epair b: R1-R2, epair c: R2-hostB
-    for p in a b c; do
-        ifconfig epair${p} create > /dev/null
-    done
-    ifconfig epaira0 vnet ${JPFX}hostA; ifconfig epaira1 vnet ${JPFX}r1
-    ifconfig epairb0 vnet ${JPFX}r1;    ifconfig epairb1 vnet ${JPFX}r2
-    ifconfig epairc0 vnet ${JPFX}r2;    ifconfig epairc1 vnet ${JPFX}hostB
+    # left: hostA-R1, middle: R1-R2, right: R2-hostB
+    leftepair=$(create_epair)
+    ifconfig ${leftepair}a name ${JPFX}lefta
+    ifconfig ${leftepair}b name ${JPFX}leftb
+    leftepair=${JPFX}left
+    middleepair=$(create_epair)
+    ifconfig ${middleepair}a name ${JPFX}middlea
+    ifconfig ${middleepair}b name ${JPFX}middleb
+    middleepair=${JPFX}middle
+    rightepair=$(create_epair)
+    ifconfig ${rightepair}a name ${JPFX}righta
+    ifconfig ${rightepair}b name ${JPFX}rightb
+    rightepair=${JPFX}right
+
+    ifconfig ${leftepair}a vnet ${JPFX}hostA; ifconfig ${leftepair}b vnet ${JPFX}r1
+    ifconfig ${middleepair}a vnet ${JPFX}r1;    ifconfig ${middleepair}b vnet ${JPFX}r2
+    ifconfig ${rightepair}a vnet ${JPFX}r2;    ifconfig ${rightepair}b vnet ${JPFX}hostB
 
     for j in hostA r1 r2 hostB; do
         jexec ${JPFX}$j ifconfig lo0 up
@@ -48,50 +65,52 @@ up() {
                                net.inet6.ip6.forwarding=1
     done
 
-    jexec ${JPFX}hostA ifconfig epaira0 inet 198.51.100.1/32 up
-    jexec ${JPFX}hostA ifconfig epaira0 inet6 2001:db8:1::1/64
-    jexec ${JPFX}r1    ifconfig epaira1 inet6 2001:db8:1::a/64
-    jexec ${JPFX}r1    ifconfig epairb0 inet6 auto_linklocal up
-    jexec ${JPFX}r2    ifconfig epairb1 inet6 auto_linklocal up
-    jexec ${JPFX}r2    ifconfig epairc0 inet6 2001:db8:2::a/64
-    jexec ${JPFX}hostB ifconfig epairc1 inet 203.0.113.5/32 up
-    jexec ${JPFX}hostB ifconfig epairc1 inet6 2001:db8:2::2/64
+    jexec ${JPFX}hostA ifconfig ${leftepair}a inet 198.51.100.1/32 up
+    jexec ${JPFX}hostA ifconfig ${leftepair}a inet6 2001:db8:1::1/64
+    jexec ${JPFX}r1    ifconfig ${leftepair}b inet6 2001:db8:1::a/64
+    jexec ${JPFX}r1    ifconfig ${middleepair}a inet6 -ifdisabled auto_linklocal up
+    jexec ${JPFX}r2    ifconfig ${middleepair}b inet6 -ifdisabled auto_linklocal up
+    jexec ${JPFX}r2    ifconfig ${rightepair}a inet6 2001:db8:2::a/64
+    jexec ${JPFX}hostB ifconfig ${rightepair}b inet 203.0.113.5/32 up
+    jexec ${JPFX}hostB ifconfig ${rightepair}b inet6 2001:db8:2::2/64
     sleep 2  # DAD
 
-    R1_A=$(lladdr r1 epaira1);  R1_B=$(lladdr r1 epairb0)
-    R2_B=$(lladdr r2 epairb1);  R2_C=$(lladdr r2 epairc0)
-    HA=$(lladdr hostA epaira0); HB=$(lladdr hostB epairc1)
+    R1_A=$(lladdr r1 ${leftepair}b);  R1_B=$(lladdr r1 ${middleepair}a)
+    R2_B=$(lladdr r2 ${middleepair}b);  R2_C=$(lladdr r2 ${rightepair}a)
+    HA=$(lladdr hostA ${leftepair}a); HB=$(lladdr hostB ${rightepair}b)
 
     # Hosts: IPv6 default router (static stand-in for RA; v4gwd reads
     # the kernel default router list -- to exercise the RA path proper,
     # run rtadvd in r1/r2 instead and use "-r"/-f modes).
-    jexec ${JPFX}hostA route -6 add default "${R1_A}%epaira0" > /dev/null
-    jexec ${JPFX}hostB route -6 add default "${R2_C}%epairc1" > /dev/null
+    jexec ${JPFX}hostA route add default -inet6 "${R1_A}%${leftepair}a" > /dev/null
+    jexec ${JPFX}hostB route add default -inet6 "${R2_C}%${rightepair}b" > /dev/null
+    jexec ${JPFX}hostA route -6 add default "${R1_A}%${leftepair}a" > /dev/null
+    jexec ${JPFX}hostB route -6 add default "${R2_C}%${rightepair}b" > /dev/null
 
     # Routers: RFC 5549 /32 routes, IPv6 next hops, ND-resolved
-    jexec ${JPFX}r1 route add -host 203.0.113.5  -inet6 "${R2_B}%epairb0" > /dev/null
-    jexec ${JPFX}r1 route add -host 198.51.100.1 -inet6 "${HA}%epaira1"  > /dev/null
-    jexec ${JPFX}r2 route add -host 198.51.100.1 -inet6 "${R1_B}%epairb1" > /dev/null
-    jexec ${JPFX}r2 route add -host 203.0.113.5  -inet6 "${HB}%epairc0"  > /dev/null
-    jexec ${JPFX}r1 route -6 add 2001:db8:2::/64 "${R2_B}%epairb0" > /dev/null
-    jexec ${JPFX}r2 route -6 add 2001:db8:1::/64 "${R1_B}%epairb1" > /dev/null
+    jexec ${JPFX}r1 route add -host 203.0.113.5  -inet6 "${R2_B}%${middleepair}a" > /dev/null
+    jexec ${JPFX}r1 route add -host 198.51.100.1 -inet6 "${HA}%${leftepair}b"  > /dev/null
+    jexec ${JPFX}r2 route add -host 198.51.100.1 -inet6 "${R1_B}%${middleepair}b" > /dev/null
+    jexec ${JPFX}r2 route add -host 203.0.113.5  -inet6 "${HB}%${rightepair}a"  > /dev/null
+    jexec ${JPFX}r1 route -6 add 2001:db8:2::/64 "${R2_B}%${middleepair}a" > /dev/null
+    jexec ${JPFX}r2 route -6 add 2001:db8:1::/64 "${R1_B}%${middleepair}b" > /dev/null
 
     # Host daemons (draft Section 4)
     daemon -p /var/run/${JPFX}-hostA.pid \
-        jexec ${JPFX}hostA "${V4GWD}" epaira0
+        jexec ${JPFX}hostA sh -c "cd ${PWD}; ${V4GWD} ${leftepair}a"
     daemon -p /var/run/${JPFX}-hostB.pid \
-        jexec ${JPFX}hostB "${V4GWD}" epairc1
+        jexec ${JPFX}hostB sh -c "cd ${PWD}; ${V4GWD} ${rightepair}b"
 
     echo "Lab up. Try: jexec ${JPFX}hostA ping -c3 203.0.113.5"
 }
 
 test_() {
     P1=$(mktemp); P2=$(mktemp); P3=$(mktemp)
-    jexec ${JPFX}hostA tcpdump -i epaira0 -nn arp -w "$P1" 2>/dev/null &
+    jexec ${JPFX}hostA tcpdump -i ${leftepair}a -nn arp -w "$P1" 2>/dev/null &
     T1=$!
-    jexec ${JPFX}r1    tcpdump -i epairb0 -nn arp -w "$P2" 2>/dev/null &
+    jexec ${JPFX}r1    tcpdump -i ${middleepair}a -nn arp -w "$P2" 2>/dev/null &
     T2=$!
-    jexec ${JPFX}hostB tcpdump -i epairc1 -nn arp -w "$P3" 2>/dev/null &
+    jexec ${JPFX}hostB tcpdump -i ${rightepair}b -nn arp -w "$P3" 2>/dev/null &
     T3=$!
     sleep 1
 
@@ -123,7 +142,9 @@ down() {
     for j in hostA r1 r2 hostB; do
         jail -r ${JPFX}$j 2>/dev/null || true
     done
-    # epairs are destroyed with their vnet jails
+    ifconfig ${JPFX}lefta destroy
+    ifconfig ${JPFX}middlea destroy
+    ifconfig ${JPFX}righta destroy
     echo "Lab down."
 }
 
