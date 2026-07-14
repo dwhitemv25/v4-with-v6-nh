@@ -83,8 +83,8 @@ up() {
     # Hosts: IPv6 default router (static stand-in for RA; v4gwd reads
     # the kernel default router list -- to exercise the RA path proper,
     # run rtadvd in r1/r2 instead and use "-r"/-f modes).
-    jexec ${JPFX}hostA route add default -inet6 "${R1_A}%${leftepair}a" > /dev/null
-    jexec ${JPFX}hostB route add default -inet6 "${R2_C}%${rightepair}b" > /dev/null
+    jexec ${JPFX}hostA route add default 192.0.0.11 > /dev/null
+    jexec ${JPFX}hostB route add default 192.0.0.11 > /dev/null
     jexec ${JPFX}hostA route -6 add default "${R1_A}%${leftepair}a" > /dev/null
     jexec ${JPFX}hostB route -6 add default "${R2_C}%${rightepair}b" > /dev/null
 
@@ -98,9 +98,9 @@ up() {
 
     # Host daemons (draft Section 4)
     daemon -p /var/run/${JPFX}-hostA.pid \
-        jexec ${JPFX}hostA sh -c "cd ${PWD}; ${V4GWD} ${leftepair}a"
+        jexec -d ${PWD} ${JPFX}hostA ${V4GWD} -r ${leftepair}a
     daemon -p /var/run/${JPFX}-hostB.pid \
-        jexec ${JPFX}hostB sh -c "cd ${PWD}; ${V4GWD} ${rightepair}b"
+        jexec -d ${PWD} ${JPFX}hostB ${V4GWD} -r ${rightepair}b
 
     echo "Lab up. Try: jexec ${JPFX}hostA ping -c3 203.0.113.5"
 }
